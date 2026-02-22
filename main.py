@@ -33,7 +33,7 @@ app = FastAPI(title="Universal Ranking API")
 origins = [
     "http://localhost:5173",     # Your Vite React App
     "http://127.0.0.1:5173",     # Alternative local IP for Vite
-    "https://ranking-app-frontend-fawn.vercel.app/",
+    "https://ranking-app-frontend-fawn.vercel.app",
 ]
 
 app.add_middleware(
