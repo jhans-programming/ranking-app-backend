@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import pymongo
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
+from bson import ObjectId
 from pydantic import BaseModel, Field, BeforeValidator
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -39,7 +40,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"]
 )
 
@@ -141,7 +142,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     return {"access_token": access_token, "token_type": "bearer"}
 
 # --- Routes: Rankings ---
-
+# CREATE
 @app.post("/rankings/", response_model=RankingResponse)
 async def create_ranking(ranking: RankingCreate, current_user: dict = Depends(get_current_user)):
     ranking_data = ranking.model_dump()
@@ -153,6 +154,43 @@ async def create_ranking(ranking: RankingCreate, current_user: dict = Depends(ge
     
     return created_ranking
 
+# UPDATE
+@app.put("/rankings/{ranking_id}", response_model=RankingResponse)
+async def update_ranking(
+    ranking_id: str, 
+    ranking_update: RankingCreate, 
+    current_user: dict = Depends(get_current_user)
+):
+    # 1. Validate the ID format so MongoDB doesn't crash
+    if not ObjectId.is_valid(ranking_id):
+        raise HTTPException(status_code=400, detail="Invalid ranking ID format")
+    
+    # 2. Verify the ranking exists AND belongs to this specific user
+    existing_ranking = rankings_collection.find_one({
+        "_id": ObjectId(ranking_id),
+        "user_username": current_user["username"]
+    })
+    
+    if not existing_ranking:
+        raise HTTPException(
+            status_code=404, 
+            detail="Ranking not found or you do not have permission to edit it"
+        )
+
+    # 3. Prepare the new data
+    update_data = ranking_update.model_dump()
+    
+    # 4. Update the document in MongoDB
+    rankings_collection.update_one(
+        {"_id": ObjectId(ranking_id)},
+        {"$set": update_data}
+    )
+    
+    # 5. Fetch and return the fresh, updated document
+    updated_ranking = rankings_collection.find_one({"_id": ObjectId(ranking_id)})
+    return updated_ranking
+
+# READ
 @app.get("/rankings/", response_model=List[RankingResponse])
 async def get_my_rankings(limit: int = 3, current_user: dict = Depends(get_current_user)):
     # Retrieve only the logged-in user's rankings
@@ -160,6 +198,32 @@ async def get_my_rankings(limit: int = 3, current_user: dict = Depends(get_curre
     cursor = cursor.sort("created_at", pymongo.DESCENDING)
     rankings = list(cursor)
     return rankings
+
+# DELETE
+@app.delete("/rankings/{ranking_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ranking(
+    ranking_id: str, 
+    current_user: dict = Depends(get_current_user)
+):
+    # 1. Validate the ID format
+    if not ObjectId.is_valid(ranking_id):
+        raise HTTPException(status_code=400, detail="Invalid ranking ID format")
+
+    # 2. Attempt to delete the specific document for this user
+    result = rankings_collection.delete_one({
+        "_id": ObjectId(ranking_id),
+        "user_username": current_user["username"]
+    })
+
+    # 3. Check if a document was actually deleted
+    if result.deleted_count == 0:
+         raise HTTPException(
+            status_code=404, 
+            detail="Ranking not found or you do not have permission to delete it"
+        )
+         
+    # A 204 status code automatically returns an empty success response
+    return
 
 # @app.get("/rankings/all", response_model=List[RankingResponse])
 # async def get_all_rankings():
